@@ -126,17 +126,22 @@ function calculateGrowth(id) {
 
     // Calculate total personal contribution
     const totalPersonalContribution = initialContribution + (annualContribution * years);
+    const interestEarned = balances[years] - totalPersonalContribution;
+
+    // Calculate percentages
+    const totalPercentage = 100;
+    const contributionPercentage = (totalPersonalContribution / balances[years]) * 100;
+    const interestPercentage = (interestEarned / balances[years]) * 100;
 
     const resultElement = document.getElementById(`result${id}`);
     if (resultElement) {
         resultElement.innerHTML = `
             After ${years} years:<br>
             Your investment will grow to: <strong>$${balances[years].toFixed(2)}</strong><br>
-            Your personal contribution: <strong>$${totalPersonalContribution.toFixed(2)}</strong><br>
-            Interest earned: <strong>$${(balances[years] - totalPersonalContribution).toFixed(2)}</strong>
+            Your personal contribution: <strong>$${totalPersonalContribution.toFixed(2)} (${contributionPercentage.toFixed(2)}%)</strong><br>
+            Interest earned: <strong>$${interestEarned.toFixed(2)} (${interestPercentage.toFixed(2)}%)</strong>
         `;
     }
-
 
     plotGrowthChart(balances, `growthChart${id}`, id);
 
@@ -178,15 +183,18 @@ function updateTotalResult() {
 
 function plotGrowthChart(balances, chartId, calculatorId) {
     const years = balances.length - 1;
-    const finalBalance = balances[balances.length - 1];
-
     const initialContribution = parseFloat(document.getElementById(`initial${calculatorId}`)?.value || 5000);
     const annualContribution = parseFloat(document.getElementById(`annualContribution${calculatorId}`)?.value || 6000);
-    const totalPersonalContribution = initialContribution + (annualContribution * years);
-    const interestEarned = finalBalance - totalPersonalContribution;
 
-    const contributionPercentage = (totalPersonalContribution / finalBalance * 100).toFixed(1);
-    const interestPercentage = (interestEarned / finalBalance * 100).toFixed(1);
+    let contributionData = [initialContribution];
+    let interestData = [0];
+    let totalData = [initialContribution];
+
+    for (let i = 1; i <= years; i++) {
+        contributionData.push(contributionData[i - 1] + annualContribution);
+        interestData.push(balances[i] - contributionData[i]);
+        totalData.push(contributionData[i] + interestData[i]);
+    }
 
     if (charts[calculatorId]) {
         charts[calculatorId].destroy();
@@ -201,29 +209,27 @@ function plotGrowthChart(balances, chartId, calculatorId) {
             labels: Array.from({ length: years + 1 }, (v, i) => i),
             datasets: [
                 {
-                    label: `Total Balance`,
-                    data: balances,
+                    label: 'Total Balance',
+                    data: totalData,
                     borderColor: colors[colorIndex],
                     tension: 0.1,
                     fill: false
                 },
                 {
-                    label: `Interest Earned (${interestPercentage}%)`,
-                    data: balances.map(balance => Math.min(balance, finalBalance)),
-                    borderColor: 'rgba(0, 128, 0, 0.5)',
-                    backgroundColor: 'rgba(0, 128, 0, 0.2)',
-                    fill: '+1',
-                    pointRadius: 0,
-                    tension: 0.1
-                },
-                {
-                    label: `Total Contribution (${contributionPercentage}%)`,
-                    data: balances.map(balance => Math.min(balance, totalPersonalContribution)),
+                    label: 'Contributions',
+                    data: contributionData,
                     borderColor: 'rgba(0, 0, 0, 0.5)',
                     backgroundColor: 'rgba(0, 0, 0, 0.1)',
-                    fill: 'origin',
-                    pointRadius: 0,
-                    tension: 0.1
+                    tension: 0.1,
+                    fill: false
+                },
+                {
+                    label: 'Interest Earned',
+                    data: interestData,
+                    borderColor: 'rgba(0, 128, 0, 0.5)',
+                    backgroundColor: 'rgba(0, 128, 0, 0.2)',
+                    tension: 0.1,
+                    fill: false
                 }
             ]
         },
