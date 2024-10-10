@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Health Tracker</title>
+    <link rel="stylesheet" href="styles.css">
+    <!-- Include jsPDF library -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+</head>
+<body>
+    <h1>Health Tracker</h1>
+    <div class="tabs">
+        <button class="tab-button" onclick="openTab('food')">Food</button>
+        <button class="tab-button" onclick="openTab('medicine')">Medicine</button>
+        <button class="tab-button" onclick="openTab('supplements')">Supplements</button>
+        <button class="tab-button" onclick="openTab('skin-contact')">Skin Contact</button>
+        <button class="tab-button" onclick="openTab('miscellaneous')">Miscellaneous</button>
+    </div>
+
+    <div id="food" class="tab-content">
+        <h2>Food</h2>
+        <form id="foodForm">
+            <input type="text" placeholder="Food Name" required>
+            <input type="text" placeholder="Quantity (e.g., 1 oz per/day)" required>
+            <button type="submit">Add Food</button>
+        </form>
+        <div id="foodList"></div>
+    </div>
+
+    <div id="medicine" class="tab-content" style="display:none;">
+        <h2>Medicine</h2>
+        <form id="medicineForm">
+            <input type="text" placeholder="Medicine Name" required>
+            <input type="text" placeholder="Quantity (e.g., 1 pill per/day)" required>
+            <button type="submit">Add Medicine</button>
+        </form>
+        <div id="medicineList"></div>
+    </div>
+
+    <div id="supplements" class="tab-content" style="display:none;">
+        <h2>Supplements</h2>
+        <form id="supplementsForm">
+            <input type="text" placeholder="Supplement Name" required>
+            <input type="text" placeholder="Quantity (e.g., 5g per/day)" required>
+            <button type="submit">Add Supplement</button>
+        </form>
+        <div id="supplementsList"></div>
+    </div>
+
+    <div id="skin-contact" class="tab-content" style="display:none;">
+        <h2>Skin Contact</h2>
+        <form id="skinContactForm">
+            <input type="text" placeholder="Item Name" required>
+            <button type="submit">Add Item</button>
+        </form>
+        <div id="skinContactList"></div>
+    </div>
+
+    <div id="miscellaneous" class="tab-content" style="display:none;">
+        <h2>Miscellaneous</h2>
+        <form id="miscellaneousForm">
+            <input type="text" placeholder="Item Name" required>
+            <input type="text" placeholder="Quantity (e.g., 1 per/day)" required>
+            <button type="submit">Add Item</button>
+        </form>
+        <div id="miscellaneousList"></div>
+    </div>
+
+    <button id="exportButton">Export as PDF</button>
+
+    <script src="script.js"></script>
+</body>
+</html>
