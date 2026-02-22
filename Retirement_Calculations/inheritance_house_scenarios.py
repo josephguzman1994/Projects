@@ -22,8 +22,9 @@ adjust if your situation differs.
 """
 
 import csv
-from dataclasses import dataclass
-from typing import List, Optional, Tuple
+import math
+from dataclasses import asdict, dataclass
+from typing import Any, Dict, List, Optional, Tuple
 
 try:
     import numpy as np
@@ -76,10 +77,12 @@ class HouseScenarioParams:
     stock_return_std: float = 0.17          # annual volatility (e.g. 17%)
     house_return_mean: float = 0.005        # expected annual house return (0.5%; short-term often <1%)
     house_return_std: float = 0.08          # annual house volatility (e.g. 8%)
+    use_fat_tails: bool = False             # if True, sample returns from Student-t (fatter tails)
+    fat_tail_df: float = 5.0                # Student-t degrees of freedom; lower = fatter tails
     # Scenario 3: same as Scenario 2 but withdraw from portfolio from given year
     withdrawal_start_year: int = 17         # start 2% withdrawals at this year
     withdrawal_rate: float = 0.02           # annual withdrawal rate (e.g. 2%)
-    # Scenario 4: Scenario 2 + estate inheritance (grows until receipt year, then added to portfolio)
+    # Scenario 4: projected value of estate inheritance only (no addition of Scenario 2)
     include_scenario_4: bool = True
     inheritance_portfolio_today: float = 9_000_000   # mother's portfolio value today
     inheritance_growth_rate: float = 0.045           # deterministic: growth until receipt (e.g. 4.5%)
@@ -89,6 +92,10 @@ class HouseScenarioParams:
     inheritance_beneficiary_share: float = 1.0 / 3  # your share (e.g. 1/3 with two sisters)
     # Benchmark years from today (35 = retirement); inheritance_years_until_receipt added when S4 included
     benchmark_years: Tuple[int, ...] = (7, 12, 17, 35)
+    # Reporting assumption: convert nominal results to today's dollars
+    inflation_rate: float = 0.03
+    retirement_income_rate: float = 0.045  # annual income-equivalent rule (e.g. 4.5%)
+    es_tail_pct: float = 0.05  # expected shortfall tail (e.g. 5% worst outcomes)
     # Other assets (common to all scenarios): Roth IRA + other house
     roth_balance_today: float = 35_500
     roth_annual_contribution: float = 7_000
@@ -300,7 +307,7 @@ def scenario3_net_worth_at_year(params: HouseScenarioParams, years_from_today: i
 
 
 # ---------------------------------------------------------------------------
-# Scenario 4: Scenario 2 + estate inheritance (received at defined year, then grows)
+# Scenario 4: projected value of estate inheritance only (no Scenario 2)
 # ---------------------------------------------------------------------------
 
 def _inheritance_received_at_receipt(params: HouseScenarioParams) -> float:
@@ -322,19 +329,18 @@ def _inheritance_value_at_year(params: HouseScenarioParams, years_from_today: in
 
 
 def scenario4_net_worth_at_year(params: HouseScenarioParams, years_from_today: int) -> float:
-    """Net worth at a given year for Scenario 4 (Scenario 2 + estate inheritance received at defined year)."""
+    """Net worth at a given year for Scenario 4 (projected inheritance value only)."""
     if not params.include_scenario_4:
-        return scenario2_net_worth_at_year(params, years_from_today)  # fallback
-    return scenario2_net_worth_at_year(params, years_from_today) + _inheritance_value_at_year(params, years_from_today)
+        return 0.0
+    return _inheritance_value_at_year(params, years_from_today)
 
 
 def scenario4_trajectory(params: HouseScenarioParams, max_years: int) -> Tuple[List[int], List[float]]:
-    """Year-by-year net worth for Scenario 4 (Scenario 2 + inheritance)."""
+    """Year-by-year net worth for Scenario 4 (inheritance value only)."""
     years = list(range(max_years + 1))
-    s2_years, s2_vals = scenario2_trajectory(params, max_years)
     if not params.include_scenario_4:
-        return s2_years, s2_vals
-    vals4 = [s2_vals[i] + _inheritance_value_at_year(params, y) for i, y in enumerate(years)]
+        return years, [0.0] * (max_years + 1)
+    vals4 = [_inheritance_value_at_year(params, y) for y in years]
     return years, vals4
 
 
@@ -408,12 +414,23 @@ def run_monte_carlo(params: HouseScenarioParams, seed: Optional[int] = None) -> 
     max_year = max(benchmark_years)
     n_paths = params.mc_n_paths
     sale_year = params.years_live_in_before_sale
+    tail_df = max(2.1, float(params.fat_tail_df))
+    es_alpha = min(0.5, max(0.001, float(params.es_tail_pct)))
+
+    def sample_returns(mean: float, std: float) -> "np.ndarray":
+        """Sample annual returns using Normal or Student-t with matched mean/std."""
+        if params.use_fat_tails:
+            # Standard t(df) has variance df/(df-2); rescale to unit variance before applying std.
+            z = rng.standard_t(df=tail_df, size=(n_paths, max_year + 1))
+            z = z * math.sqrt((tail_df - 2.0) / tail_df)
+            out = mean + std * z
+        else:
+            out = rng.normal(mean, std, size=(n_paths, max_year + 1))
+        return np.clip(out, -0.99, 2.0)
 
     # Pre-sample all returns: [path, year]
-    house_returns = rng.normal(params.house_return_mean, params.house_return_std, size=(n_paths, max_year + 1))
-    house_returns = np.clip(house_returns, -0.99, 2.0)  # avoid negative wealth
-    stock_returns = rng.normal(params.stock_return_mean, params.stock_return_std, size=(n_paths, max_year + 1))
-    stock_returns = np.clip(stock_returns, -0.99, 2.0)
+    house_returns = sample_returns(params.house_return_mean, params.house_return_std)
+    stock_returns = sample_returns(params.stock_return_mean, params.stock_return_std)
 
     s1_paths = np.zeros((n_paths, max_year + 1))
     s2_paths = np.zeros((n_paths, max_year + 1))
@@ -470,21 +487,15 @@ def run_monte_carlo(params: HouseScenarioParams, seed: Optional[int] = None) -> 
                 invest_p = invest_p * (1.0 + stock_returns[p, t])
             s3_paths[p, t] = cash_p + invest_p
 
-    # Scenario 4: S2 + estate inheritance (inheritance portfolio keeps growing at inheritance_return mean/std; no split/reinvest at receipt)
+    # Scenario 4: inheritance value only (no S2); portfolio grows at inheritance_return mean/std
     s4_paths = np.zeros((n_paths, max_year + 1))
     if params.include_scenario_4:
-        inheritance_returns = rng.normal(
-            params.inheritance_return_mean,
-            params.inheritance_return_std,
-            size=(n_paths, max_year + 1),
-        )
-        inheritance_returns = np.clip(inheritance_returns, -0.99, 2.0)
+        inheritance_returns = sample_returns(params.inheritance_return_mean, params.inheritance_return_std)
         for p in range(n_paths):
             port_val = params.inheritance_portfolio_today
             for t in range(max_year + 1):
-                s4_paths[p, t] = s2_paths[p, t]
                 inv_value = params.inheritance_beneficiary_share * port_val
-                s4_paths[p, t] += inv_value
+                s4_paths[p, t] = inv_value
                 if t < max_year:
                     port_val = port_val * (1.0 + inheritance_returns[p, t])
 
@@ -504,51 +515,96 @@ def run_monte_carlo(params: HouseScenarioParams, seed: Optional[int] = None) -> 
     benchmark_other_house_equity = {y: other_house_equity_at_year(params, y) for y in benchmark_years}
 
     years = list(range(max_year + 1))
-    s1_median = np.median(s1_paths, axis=0)
-    s1_p25 = np.percentile(s1_paths, 25, axis=0)
-    s1_p75 = np.percentile(s1_paths, 75, axis=0)
-    s2_median = np.median(s2_paths, axis=0)
-    s2_p25 = np.percentile(s2_paths, 25, axis=0)
-    s2_p75 = np.percentile(s2_paths, 75, axis=0)
-    s3_median = np.median(s3_paths, axis=0)
-    s3_p25 = np.percentile(s3_paths, 25, axis=0)
-    s3_p75 = np.percentile(s3_paths, 75, axis=0)
-    s4_median = np.median(s4_paths, axis=0) if params.include_scenario_4 else s2_median
-    s4_p25 = np.percentile(s4_paths, 25, axis=0) if params.include_scenario_4 else s2_p25
-    s4_p75 = np.percentile(s4_paths, 75, axis=0) if params.include_scenario_4 else s2_p75
+    def summarize_paths(paths: "np.ndarray") -> Dict[str, "np.ndarray"]:
+        p10 = np.percentile(paths, 10, axis=0)
+        p25 = np.percentile(paths, 25, axis=0)
+        p75 = np.percentile(paths, 75, axis=0)
+        median = np.median(paths, axis=0)
+        k = max(1, int(math.ceil(es_alpha * paths.shape[0])))
+        sorted_paths = np.sort(paths, axis=0)
+        es = np.mean(sorted_paths[:k, :], axis=0)
+        return {"median": median, "p10": p10, "p25": p25, "p75": p75, "es": es}
+
+    s1_stats = summarize_paths(s1_paths)
+    s2_stats = summarize_paths(s2_paths)
+    s3_stats = summarize_paths(s3_paths)
+    s4_stats = summarize_paths(s4_paths) if params.include_scenario_4 else {
+        "median": np.zeros(max_year + 1),
+        "p10": np.zeros(max_year + 1),
+        "p25": np.zeros(max_year + 1),
+        "p75": np.zeros(max_year + 1),
+        "es": np.zeros(max_year + 1),
+    }
+    s1_median, s1_p10, s1_p25, s1_p75, s1_es = s1_stats["median"], s1_stats["p10"], s1_stats["p25"], s1_stats["p75"], s1_stats["es"]
+    s2_median, s2_p10, s2_p25, s2_p75, s2_es = s2_stats["median"], s2_stats["p10"], s2_stats["p25"], s2_stats["p75"], s2_stats["es"]
+    s3_median, s3_p10, s3_p25, s3_p75, s3_es = s3_stats["median"], s3_stats["p10"], s3_stats["p25"], s3_stats["p75"], s3_stats["es"]
+    s4_median, s4_p10, s4_p25, s4_p75, s4_es = s4_stats["median"], s4_stats["p10"], s4_stats["p25"], s4_stats["p75"], s4_stats["es"]
 
     benchmark_median1 = {y: float(s1_median[y]) for y in benchmark_years}
     benchmark_median2 = {y: float(s2_median[y]) for y in benchmark_years}
     benchmark_median3 = {y: float(s3_median[y]) for y in benchmark_years}
     benchmark_median4 = {y: float(s4_median[y]) for y in benchmark_years} if params.include_scenario_4 else {}
+    benchmark_p10_1 = {y: float(s1_p10[y]) for y in benchmark_years}
+    benchmark_p10_2 = {y: float(s2_p10[y]) for y in benchmark_years}
+    benchmark_p10_3 = {y: float(s3_p10[y]) for y in benchmark_years}
+    benchmark_p10_4 = {y: float(s4_p10[y]) for y in benchmark_years} if params.include_scenario_4 else {}
+    benchmark_es_1 = {y: float(s1_es[y]) for y in benchmark_years}
+    benchmark_es_2 = {y: float(s2_es[y]) for y in benchmark_years}
+    benchmark_es_3 = {y: float(s3_es[y]) for y in benchmark_years}
+    benchmark_es_4 = {y: float(s4_es[y]) for y in benchmark_years} if params.include_scenario_4 else {}
     diff_medians = {y: benchmark_median2[y] - benchmark_median1[y] for y in benchmark_years}
 
     out = {
         "params": params,
         "years": years,
         "s1_median": s1_median,
+        "s1_p10": s1_p10,
         "s1_p25": s1_p25,
         "s1_p75": s1_p75,
+        "s1_es": s1_es,
         "s2_median": s2_median,
+        "s2_p10": s2_p10,
         "s2_p25": s2_p25,
         "s2_p75": s2_p75,
+        "s2_es": s2_es,
         "s3_median": s3_median,
+        "s3_p10": s3_p10,
         "s3_p25": s3_p25,
         "s3_p75": s3_p75,
+        "s3_es": s3_es,
         "benchmark_years": list(benchmark_years),
         "benchmark_median1": benchmark_median1,
         "benchmark_median2": benchmark_median2,
         "benchmark_median3": benchmark_median3,
+        "benchmark_p10_1": benchmark_p10_1,
+        "benchmark_p10_2": benchmark_p10_2,
+        "benchmark_p10_3": benchmark_p10_3,
+        "benchmark_es_1": benchmark_es_1,
+        "benchmark_es_2": benchmark_es_2,
+        "benchmark_es_3": benchmark_es_3,
         "diff_medians": diff_medians,
         "n_paths": n_paths,
     }
     if params.include_scenario_4:
         out["s4_median"] = s4_median
+        out["s4_p10"] = s4_p10
         out["s4_p25"] = s4_p25
         out["s4_p75"] = s4_p75
+        out["s4_es"] = s4_es
         out["benchmark_median4"] = benchmark_median4
+        out["benchmark_p10_4"] = benchmark_p10_4
+        out["benchmark_es_4"] = benchmark_es_4
     out["benchmark_roth_median"] = benchmark_roth_median
     out["benchmark_other_house_equity"] = benchmark_other_house_equity
+    roth_stats = summarize_paths(roth_paths)
+    out["roth_median"] = roth_stats["median"]
+    out["roth_p10"] = roth_stats["p10"]
+    out["roth_p25"] = roth_stats["p25"]
+    out["roth_p75"] = roth_stats["p75"]
+    out["roth_es"] = roth_stats["es"]
+    out["benchmark_roth_p10"] = {y: float(roth_stats["p10"][y]) for y in benchmark_years}
+    out["benchmark_roth_es"] = {y: float(roth_stats["es"][y]) for y in benchmark_years}
+    out["es_tail_pct"] = es_alpha
     return out
 
 
@@ -633,7 +689,7 @@ def print_report(results: dict) -> None:
     print(f"  After sale:            {p.pct_cash_reserve*100:.0f}% cash reserve, {p.pct_invest*100:.0f}% invested")
     if p.include_scenario_4:
         recv = _inheritance_received_at_receipt(p)
-        print(f"\n  Scenario 4 (estate inheritance):")
+        print(f"\n  Scenario 4 (inheritance value only):")
         print(f"  Mother's portfolio today: {format_currency(p.inheritance_portfolio_today)}")
         print(f"  Growth until receipt:     {p.inheritance_growth_rate*100:.1f}% per year (deterministic)")
         print(f"  Monte Carlo inheritance:  μ={p.inheritance_return_mean*100:.0f}%, σ={p.inheritance_return_std*100:.0f}%")
@@ -659,10 +715,10 @@ def print_report(results: dict) -> None:
     print("\n" + "-" * 70)
     print("NET WORTH COMPARISON AT BENCHMARK YEARS (35 = retirement)")
     if p.include_scenario_4:
-        print(f"  Scenario 4: Sell & invest + estate inheritance (received year {p.inheritance_years_until_receipt})")
+        print(f"  Scenario 4: Inheritance only (received year {p.inheritance_years_until_receipt})")
     print("-" * 70)
     w_pct = p.withdrawal_rate * 100
-    s4_col = f" {'S2 + inherit':>14}" if p.include_scenario_4 else ""
+    s4_col = f" {'Inheritance':>14}" if p.include_scenario_4 else ""
     print(f"{'Years out':<12} {'Keep house':>14} {'Sell & invest':>14} {'Sell + ' + f'{w_pct:.1f}%' + ' w/d':>14} {'Diff (2−1)':>14}{s4_col}")
     print("-" * 70)
     for y in results["benchmark_years"]:
@@ -713,7 +769,7 @@ def print_monte_carlo_diff_medians(mc_results: dict) -> None:
     print(f"  N = {mc_results['n_paths']} paths  |  House: μ={p.house_return_mean*100:.1f}%, σ={p.house_return_std*100:.0f}%  |  Stock: μ={p.stock_return_mean*100:.0f}%, σ={p.stock_return_std*100:.0f}%{inh_note}")
     print("-" * 70)
     w_pct = p.withdrawal_rate * 100
-    s4_col = " {'S2+inherit (med)':>16}" if p.include_scenario_4 else ""
+    s4_col = " {'Inheritance (med)':>16}" if p.include_scenario_4 else ""
     print(f"{'Years out':<12} {'Keep (med)':>14} {'Sell (med)':>14} {'Sell+' + f'{w_pct:.1f}%' + ' (med)':>14} {'S2−S1':>14} {'S3−S1':>14}{s4_col}")
     print("-" * 70)
     for y in mc_results["benchmark_years"]:
@@ -767,12 +823,12 @@ def plot_monte_carlo_trajectories(mc_results: dict, save_path: str = "inheritanc
     w_pct = p.withdrawal_rate * 100
     ax.fill_between(years, s3_p25, s3_p75, color=purple, alpha=0.25, label=f"Scenario 3: Sell + {w_pct:.1f}% w/d (25–75%)")
     ax.plot(years, s3_median, color=purple, linewidth=2.5, label=f"Scenario 3: Sell + {w_pct:.1f}% w/d (median)")
-    # Scenario 4: S2 + inheritance (teal)
+    # Scenario 4: Inheritance only (teal)
     if p.include_scenario_4 and "s4_median" in mc_results:
         s4_median = mc_results["s4_median"]
         s4_p25, s4_p75 = mc_results["s4_p25"], mc_results["s4_p75"]
-        ax.fill_between(years, s4_p25, s4_p75, color=teal, alpha=0.25, label="Scenario 4: S2 + inheritance (25–75%)")
-        ax.plot(years, s4_median, color=teal, linewidth=2.5, label="Scenario 4: S2 + inheritance (median)")
+        ax.fill_between(years, s4_p25, s4_p75, color=teal, alpha=0.25, label="Scenario 4: Inheritance (25–75%)")
+        ax.plot(years, s4_median, color=teal, linewidth=2.5, label="Scenario 4: Inheritance (median)")
 
     for y in mc_results["benchmark_years"]:
         ax.axvline(x=y, color="gray", linestyle="--", alpha=0.5)
@@ -843,15 +899,11 @@ def plot_monte_carlo_inheritance_comparison(mc_results: dict, save_path: str = "
     bm2 = mc_results["benchmark_median2"]
     bm3 = mc_results["benchmark_median3"]
     bm4 = mc_results["benchmark_median4"]
-    # Your share of inheritance portfolio: before R = projected (share * portfolio_today * (1+rate)^t); at/after R = MC inheritance component (S4-S2).
-    def inheritance_component_at(y: int) -> float:
-        if y < R:
-            return p.inheritance_beneficiary_share * (p.inheritance_portfolio_today * ((1.0 + p.inheritance_growth_rate) ** y))
-        return bm4[y] - bm2[y]
+    # Inheritance at each benchmark: S4 is inheritance-only, so bm4[y] is the inheritance value.
+    inv_at = [bm4[y] for y in benchmarks]
     s1_alone = [bm1[y] for y in benchmarks]
     s2_alone = [bm2[y] for y in benchmarks]
     s3_alone = [bm3[y] for y in benchmarks]
-    inv_at = [inheritance_component_at(y) for y in benchmarks]
     s1_plus_inv = [bm1[y] + inv_at[j] for j, y in enumerate(benchmarks)]
     s2_plus_inv = [bm2[y] + inv_at[j] for j, y in enumerate(benchmarks)]
     s3_plus_inv = [bm3[y] + inv_at[j] for j, y in enumerate(benchmarks)]
@@ -942,7 +994,7 @@ def plot_benchmark_bars(
     mc_results: dict | None = None,
 ) -> None:
     """Bar chart comparing net worth at benchmark years (MC median when mc_results provided, else deterministic).
-    Includes Scenario 4 (S2 + inheritance) when present."""
+    Includes Scenario 4 (inheritance only) when present."""
     if not MATPLOTLIB_AVAILABLE:
         print("Matplotlib not available. Skipping benchmark bar chart.")
         return
@@ -983,7 +1035,7 @@ def plot_benchmark_bars(
     w_pct = params.withdrawal_rate * 100
     ax.bar([i + width/2 for i in x], s3_totals, width, label=f"Scenario 3: Sell + {w_pct:.1f}% w/d", color=purple, alpha=0.85)
     if params.include_scenario_4 and s4_totals:
-        ax.bar([i + off for i in x], s4_totals, width, label="Scenario 4: S2 + inheritance", color=teal, alpha=0.85)
+        ax.bar([i + off for i in x], s4_totals, width, label="Scenario 4: Inheritance", color=teal, alpha=0.85)
 
     xtick_labels = [str(y) if (not params.include_scenario_4 or y != params.inheritance_years_until_receipt) else f"{y}\n(inherit)" for y in benchmarks]
     ax.set_ylabel("Net worth", fontsize=12, fontweight="bold")
@@ -1047,7 +1099,7 @@ def plot_total_net_worth_stacked_bars(
         (s3_vals, f"S3: Sell + {w_pct:.1f}% w/d", purple),
     ]
     if params.include_scenario_4:
-        scenario_groups.append((s4_vals, "S4: S2 + inheritance", teal))
+        scenario_groups.append((s4_vals, "S4: Inheritance", teal))
     x_centers = list(range(n_bench))
     for sc_idx, (sc_vals, label, color) in enumerate(scenario_groups):
         # offset so bars are grouped per benchmark year
@@ -1256,6 +1308,82 @@ def default_params() -> HouseScenarioParams:
     )
 
 
+# ---------------------------------------------------------------------------
+# Flexible scenario list: run multiple named scenarios (for web app)
+# ---------------------------------------------------------------------------
+
+def merge_params(base: HouseScenarioParams, overrides: Dict[str, Any]) -> HouseScenarioParams:
+    """Build a new HouseScenarioParams from base with overrides applied."""
+    d = asdict(base)
+    for k, v in overrides.items():
+        if k not in d:
+            continue
+        if v is None:
+            continue
+        if k == "benchmark_years":
+            d[k] = tuple(v) if isinstance(v, list) else v
+        elif k == "home_return_sequence" and isinstance(v, list):
+            d[k] = tuple(float(x) for x in v)
+        else:
+            d[k] = v
+    return HouseScenarioParams(**d)
+
+
+def run_scenarios(
+    global_params: HouseScenarioParams,
+    scenario_configs: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """
+    Run a list of named scenarios (deterministic). Each config has:
+    - id: unique id (e.g. uuid or index)
+    - name: display name
+    - type: keep_property | sell_invest | sell_invest_withdrawals | inheritance_only | roth | other_property
+    - params: dict of param overrides for this scenario (optional)
+    Returns: { benchmark_years, scenarios: { id: { name, type, years, values, values_at_benchmark } }, sale_breakdowns: { id: {...} } }
+    """
+    benchmark_years = _effective_benchmark_years(global_params)
+    max_year = max(benchmark_years)
+    out: Dict[str, Any] = {
+        "benchmark_years": list(benchmark_years),
+        "scenarios": {},
+        "sale_breakdowns": {},
+    }
+    for cfg in scenario_configs:
+        sid = str(cfg.get("id") or cfg.get("name", ""))
+        name = str(cfg.get("name", "Unnamed"))
+        typ = str(cfg.get("type", ""))
+        overrides = cfg.get("params") or {}
+        params = merge_params(global_params, overrides)
+        years: List[int]
+        vals: List[float]
+        if typ == "keep_property":
+            years, vals = scenario1_trajectory(params, max_year)
+        elif typ == "sell_invest":
+            years, vals = scenario2_trajectory(params, max_year)
+            out["sale_breakdowns"][sid] = {k: (v if v == v else None) for k, v in sale_costs_breakdown(params).items()}
+        elif typ == "sell_invest_withdrawals":
+            _y, vals, _c, _i, _w = scenario3_trajectory_and_withdrawals(params, max_year)
+            years = list(range(max_year + 1))
+            out["sale_breakdowns"][sid] = {k: (v if v == v else None) for k, v in sale_costs_breakdown(params).items()}
+        elif typ == "inheritance_only":
+            years, vals = scenario4_trajectory(params, max_year)
+        elif typ == "roth":
+            years, vals = roth_trajectory(params, max_year)
+        elif typ == "other_property":
+            years, vals = other_house_equity_trajectory(params, max_year)
+        else:
+            continue
+        values_at_benchmark = {y: float(vals[y]) for y in benchmark_years if y < len(vals)}
+        out["scenarios"][sid] = {
+            "name": name,
+            "type": typ,
+            "years": years,
+            "values": [float(v) for v in vals],
+            "values_at_benchmark": values_at_benchmark,
+        }
+    return out
+
+
 def _prompt_float(msg: str, default: float, min_val: float, max_val: float, scale: float = 1.0) -> float:
     """Prompt for a float; Enter uses default. scale: e.g. 0.01 for percentage input -> decimal."""
     try:
@@ -1315,7 +1443,7 @@ def prompt_params() -> HouseScenarioParams:
     selling_costs = _prompt_float("Selling costs % [default 6]: ", 0.06, 0.0, 20.0, 0.01)
     mc_paths = _prompt_int("Monte Carlo paths [default 10000]: ", 10000, 100, 100_000)
     # Scenario 4: estate inheritance
-    incl_s4 = input("Include Scenario 4 (estate inheritance)? (y/n) [default y]: ").strip().lower()
+    incl_s4 = input("Include Scenario 4 (inheritance only)? (y/n) [default y]: ").strip().lower()
     include_scenario_4 = incl_s4 in ("", "y", "yes")
     inheritance_portfolio_today = 9_000_000
     inheritance_growth_rate = 0.045
