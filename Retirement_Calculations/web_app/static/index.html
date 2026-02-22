@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Inheritance & House Scenarios</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="container">
+    <header class="app-header">
+      <div>
+        <h1>Inheritance & House Scenarios</h1>
+        <p class="tagline">Compare keep vs. sell & invest — net worth over time with deterministic and Monte Carlo projections.</p>
+      </div>
+      <div class="header-actions">
+        <label for="mc_n_paths" class="header-label">Simulation paths</label>
+        <input type="number" id="mc_n_paths" class="header-input" min="500" max="50000" step="500" value="10000" title="Monte Carlo simulation paths">
+        <button type="button" class="btn btn-secondary" id="btnReset">Reset to defaults</button>
+        <button type="button" class="btn btn-primary" id="btnUpdate">Update projections</button>
+      </div>
+    </header>
+
+    <div id="errorBanner" class="error-banner" role="alert" aria-live="polite">
+      <span id="errorBannerText"></span>
+      <button type="button" class="dismiss" id="errorBannerDismiss" aria-label="Dismiss">×</button>
+    </div>
+
+    <div class="grid">
+      <div class="params-column">
+        <div class="panel scenario-add-top-panel">
+          <div class="scenario-add-wrap scenario-add-top">
+            <button type="button" class="btn btn-primary" id="btnAddScenario">Add scenario</button>
+            <div id="addScenarioMenu" class="add-scenario-menu" role="menu" aria-hidden="true">
+              <button type="button" role="menuitem" data-type="keep_property">Keep property (appreciation only)</button>
+              <button type="button" role="menuitem" data-type="sell_invest">Sell and invest house proceeds</button>
+              <button type="button" role="menuitem" data-type="sell_invest_withdrawals">Sell and invest + withdrawals</button>
+              <button type="button" role="menuitem" data-type="inheritance_only">Inheritance (projected value)</button>
+              <button type="button" role="menuitem" data-type="roth">Roth IRA growth</button>
+              <button type="button" role="menuitem" data-type="other_property">Other property equity</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <details class="settings-collapse">
+            <summary>Default Model Assumption Settings</summary>
+            <div class="inner">
+
+          <details class="section-collapse" open>
+            <summary>Property & sale</summary>
+            <div class="inner">
+              <div class="form-group">
+                <label for="home_value_today">Inherited property value today ($)</label>
+                <input type="number" id="home_value_today" min="0" step="1000" value="864000">
+              </div>
+              <div class="form-group">
+                <label for="years_live_in_before_sale">Years in property before sale</label>
+                <input type="number" id="years_live_in_before_sale" min="1" max="20" value="2">
+              </div>
+              <div class="form-group">
+                <label>Selling costs (%)</label>
+                <div class="slider-row">
+                  <input type="range" id="selling_costs_pct" min="0" max="15" step="0.5" value="6">
+                  <span class="value" id="selling_costs_pct_val">6%</span>
+                </div>
+              </div>
+              <div class="form-group">
+                <label>Cash reserve % (rest to invest)</label>
+                <div class="slider-row">
+                  <input type="range" id="pct_cash_reserve" min="0" max="50" step="1" value="25">
+                  <span class="value" id="pct_cash_reserve_val">25%</span>
+                </div>
+              </div>
+            </div>
+          </details>
+
+          <details class="section-collapse" open>
+            <summary>Monte Carlo (returns)</summary>
+            <div class="inner">
+              <div class="form-group">
+                <label>Stock return mean (%)</label>
+                <div class="slider-row">
+                  <input type="range" id="stock_return_mean" min="0" max="15" step="0.5" value="8">
+                  <span class="value" id="stock_return_mean_val">8%</span>
+                </div>
+              </div>
+              <div class="form-group">
+                <label>Stock return std (%)</label>
+                <div class="slider-row">
+                  <input type="range" id="stock_return_std" min="5" max="40" step="1" value="17">
+                  <span class="value" id="stock_return_std_val">17%</span>
+                </div>
+              </div>
+              <div class="form-group">
+                <label>House return mean (%)</label>
+                <div class="slider-row">
+                  <input type="range" id="house_return_mean" min="-2" max="8" step="0.25" value="0.5">
+                  <span class="value" id="house_return_mean_val">0.5%</span>
+                </div>
+              </div>
+              <div class="form-group">
+                <label>House return std (%)</label>
+                <div class="slider-row">
+                  <input type="range" id="house_return_std" min="0" max="25" step="1" value="8">
+                  <span class="value" id="house_return_std_val">8%</span>
+                </div>
+              </div>
+            </div>
+          </details>
+
+          <details class="section-collapse">
+            <summary>Benchmark years</summary>
+            <div class="inner">
+              <div class="form-group">
+                <label for="benchmark_years">Years from today to compare (comma-separated)</label>
+                <input type="text" id="benchmark_years" value="7, 12, 17, 35" placeholder="7, 12, 17, 35">
+                <span class="hint">e.g. 7, 12, 17, 35 (35 = retirement)</span>
+              </div>
+              <div class="form-group">
+                <label for="inflation_rate">Inflation assumption (%)</label>
+                <input type="number" id="inflation_rate" min="-2" max="12" step="0.1" value="3.0">
+                <span class="hint">Used to convert nominal values into today's dollars.</span>
+              </div>
+              <details class="section-collapse">
+                <summary>Advanced reporting settings</summary>
+                <div class="inner">
+                  <div class="form-group">
+                    <label for="retirement_income_rate">Income-equivalent rate (%)</label>
+                    <input type="number" id="retirement_income_rate" min="0.5" max="15" step="0.1" value="4.5">
+                    <span class="hint">Used to estimate annual retirement income from net worth at benchmarks.</span>
+                  </div>
+                  <div class="form-group">
+                    <label for="es_tail_pct">Expected shortfall tail (%)</label>
+                    <input type="number" id="es_tail_pct" min="0.5" max="20" step="0.5" value="5.0">
+                    <span class="hint">ES averages the worst x% of outcomes (default 5%).</span>
+                  </div>
+                </div>
+              </details>
+            </div>
+          </details>
+
+          <details class="section-collapse">
+            <summary>Scenario 3 — Withdrawals</summary>
+            <div class="inner">
+              <div class="form-group">
+                <label for="withdrawal_start_year">Withdrawal start year</label>
+                <input type="number" id="withdrawal_start_year" min="1" max="40" value="17">
+              </div>
+              <div class="form-group">
+                <label>Withdrawal rate (%)</label>
+                <div class="slider-row">
+                  <input type="range" id="withdrawal_rate" min="0" max="6" step="0.25" value="2">
+                  <span class="value" id="withdrawal_rate_val">2%</span>
+                </div>
+              </div>
+            </div>
+          </details>
+
+          <details class="section-collapse">
+            <summary>Scenario 4 — Inheritance only</summary>
+            <div class="inner">
+              <div class="form-group checkbox-row">
+                <input type="checkbox" id="include_scenario_4" checked>
+                <label for="include_scenario_4">Include Scenario 4</label>
+              </div>
+              <div class="form-group">
+                <label for="inheritance_portfolio_today">Estate portfolio value today ($)</label>
+                <input type="number" id="inheritance_portfolio_today" min="0" step="100000" value="9000000">
+              </div>
+              <div class="form-group">
+                <label for="inheritance_years_until_receipt">Years until inheritance receipt</label>
+                <input type="number" id="inheritance_years_until_receipt" min="1" max="50" value="24">
+              </div>
+              <div class="form-group">
+                <label for="inheritance_beneficiary_n">Your share (1 of n beneficiaries)</label>
+                <input type="number" id="inheritance_beneficiary_n" min="1" max="20" value="3" placeholder="e.g. 3 = 1/3">
+              </div>
+              <div class="form-group">
+                <label>Estate growth % until receipt</label>
+                <div class="slider-row">
+                  <input type="range" id="inheritance_growth_rate" min="0" max="10" step="0.25" value="4.5">
+                  <span class="value" id="inheritance_growth_rate_val">4.5%</span>
+                </div>
+              </div>
+              <div class="form-group">
+                <label>Inheritance MC return mean (%)</label>
+                <div class="slider-row">
+                  <input type="range" id="inheritance_return_mean" min="0" max="12" step="0.5" value="5">
+                  <span class="value" id="inheritance_return_mean_val">5%</span>
+                </div>
+              </div>
+              <div class="form-group">
+                <label>Inheritance MC return std (%)</label>
+                <div class="slider-row">
+                  <input type="range" id="inheritance_return_std" min="0" max="30" step="1" value="14">
+                  <span class="value" id="inheritance_return_std_val">14%</span>
+                </div>
+              </div>
+            </div>
+          </details>
+
+          <details class="section-collapse">
+            <summary>Roth IRA & other assets</summary>
+            <div class="inner">
+              <div class="form-group">
+                <label for="roth_balance_today">Roth balance today ($)</label>
+                <input type="number" id="roth_balance_today" min="0" step="500" value="35500">
+              </div>
+              <div class="form-group">
+                <label for="roth_annual_contribution">Roth annual contribution ($)</label>
+                <input type="number" id="roth_annual_contribution" min="0" step="500" value="7000">
+              </div>
+              <div class="form-group">
+                <label for="roth_contribution_years">Roth contribution years</label>
+                <input type="number" id="roth_contribution_years" min="0" max="50" value="35">
+              </div>
+              <div class="form-group">
+                <label>Investment return % (deterministic)</label>
+                <div class="slider-row">
+                  <input type="range" id="investment_return_rate" min="0" max="12" step="0.25" value="7">
+                  <span class="value" id="investment_return_rate_val">7%</span>
+                </div>
+              </div>
+              <div class="form-group">
+                <label for="other_house_value_today">Other property value today ($)</label>
+                <input type="number" id="other_house_value_today" min="0" step="1000" value="316000">
+              </div>
+              <div class="form-group">
+                <label for="other_house_mortgage_remaining">Other property mortgage remaining ($)</label>
+                <input type="number" id="other_house_mortgage_remaining" min="0" step="1000" value="140748">
+              </div>
+              <div class="form-group">
+                <label for="other_house_mortgage_payoff_years">Mortgage payoff years</label>
+                <input type="number" id="other_house_mortgage_payoff_years" min="1" max="40" step="0.5" value="20">
+              </div>
+            </div>
+          </details>
+            </div>
+          </details>
+
+          <div class="scenarios-section">
+            <h2>Scenarios in this model</h2>
+            <p class="scenarios-hint">Add scenarios from the templates below. Each appears as a column in the results. Edit a scenario to change its settings.</p>
+            <div class="scenario-list">
+              <p id="scenarioListEmpty" class="scenario-list-empty">No scenarios yet. Click &quot;Add scenario&quot; to choose a template.</p>
+              <div id="scenarioListCards" class="scenario-list-cards"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="results-column">
+        <div class="loading-overlay" id="loadingOverlay" aria-hidden="true">
+          <div>
+            <div class="spinner" aria-hidden="true"></div>
+            <p class="msg" id="loadingMsg">Updating projections…</p>
+          </div>
+        </div>
+
+        <div class="panel results-panel" id="resultsContent" aria-live="polite" aria-busy="false">
+          <div id="assumptionsBanner" class="assumptions-banner">
+            <span class="label">Assumptions:</span>
+            <span class="muted">Update projections to display the current run assumptions.</span>
+          </div>
+          <div class="tabs" role="tablist">
+            <button type="button" role="tab" id="tabOverview" aria-selected="true" aria-controls="panelOverview">Overview</button>
+            <button type="button" role="tab" id="tabTrajectories" aria-selected="false" aria-controls="panelTrajectories">Trajectories</button>
+            <button type="button" role="tab" id="tabMC" aria-selected="false" aria-controls="panelMC">Monte Carlo</button>
+          </div>
+
+          <div id="panelOverview" class="tab-panel is-active" role="tabpanel">
+            <div class="results-section">
+              <h3>Sale breakdown (at sale year)</h3>
+              <div id="saleBreakdown"><span class="loading">Update projections to see sale breakdown.</span></div>
+            </div>
+            <div class="results-section">
+              <h3>Net worth at benchmark years</h3>
+              <div class="table-wrap" id="benchmarkTable"><span class="loading">Update projections to see benchmark table.</span></div>
+              <div class="export-row">
+                <button type="button" class="btn btn-secondary" id="btnExportCsv">Download table as CSV</button>
+              </div>
+            </div>
+          </div>
+
+          <div id="panelTrajectories" class="tab-panel" role="tabpanel">
+            <div class="results-section">
+              <h3>Net worth over time (deterministic)</h3>
+              <div class="chart-wrap">
+                <canvas id="chartTrajectories"></canvas>
+              </div>
+            </div>
+          </div>
+
+          <div id="panelMC" class="tab-panel" role="tabpanel">
+            <div class="results-section">
+              <h3>Scenario medians & 25–75% bands</h3>
+              <div class="chart-wrap">
+                <canvas id="chartMC"></canvas>
+              </div>
+            </div>
+            <div class="results-section">
+              <h3>Monte Carlo benchmark table</h3>
+              <div class="mc-options-row">
+                <label class="checkbox-row">
+                  <input type="checkbox" id="mcShowRiskColumns">
+                  <span>Show risk columns (p75-p25, p25/median, p10, ES)</span>
+                </label>
+              </div>
+              <div class="table-wrap" id="mcBenchmarkTable"><span class="loading">Update projections to see Monte Carlo medians.</span></div>
+              <div class="export-row">
+                <button type="button" class="btn btn-secondary" id="btnExportMcCsv">Download Monte Carlo as CSV</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="editScenarioModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="editScenarioModalTitle" aria-hidden="true">
+      <div class="modal-backdrop" id="editScenarioModalBackdrop"></div>
+      <div class="modal-content">
+        <h3 id="editScenarioModalTitle" class="modal-title">Edit scenario</h3>
+        <div id="editScenarioForm" class="edit-scenario-form"></div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-secondary" id="editScenarioCancel">Cancel</button>
+          <button type="button" class="btn btn-primary" id="editScenarioSave">Save</button>
+        </div>
+      </div>
+    </div>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>

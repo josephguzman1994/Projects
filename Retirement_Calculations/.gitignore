@@ -1,0 +1,13 @@
+# Python cache
+__pycache__/
+*.pyc
+
+# Virtual environments
+venv/
+.env/
+
+# Mac/Linux
+.DS_Store
+
+# Generated plots (optional — decide if you really want these tracked)
+*.png
