@@ -73,7 +73,7 @@ body {
 }
 .app-header .header-input:focus {
   outline: none;
-  border-color: var(--primary);
+  border-color: var(--accent);
 }
 /* Grid: sticky params + results */
 .grid {
@@ -258,7 +258,9 @@ table {
   font-size: 0.875rem;
 }
 th, td { padding: 0.6rem 0.75rem; text-align: right; border-bottom: 1px solid var(--border); }
+tr:first-child th, tr:first-child td { border-bottom: 2px solid var(--border); }
 th { font-weight: 600; color: var(--text-muted); text-align: left; }
+tbody td:first-child { text-align: left; font-weight: 600; color: var(--text); }
 td.num { font-family: 'JetBrains Mono', monospace; }
 .num-main { font-family: 'JetBrains Mono', monospace; }
 .num-sub { font-size: 0.72rem; color: var(--text-muted); margin-top: 0.1rem; }
@@ -288,6 +290,7 @@ tbody tr:nth-child(even) { background: rgba(255, 255, 255, 0.03); }
 .tabs [role="tab"]:hover { color: var(--text); }
 .tabs [role="tab"][aria-selected="true"] {
   color: var(--accent);
+  background: var(--surface2);
   border-bottom-color: var(--accent);
 }
 .tab-panel {
@@ -300,12 +303,34 @@ tbody tr:nth-child(even) { background: rgba(255, 255, 255, 0.03); }
 .results-section { margin-top: 1.25rem; }
 .results-section:first-child { margin-top: 0; }
 .results-section h3 {
-  font-size: 1.05rem;
+  font-size: 0.95rem;
   font-weight: 600;
-  margin: 0 0 0.75rem 0;
+  margin: 0 0 0.5rem 0;
   color: var(--text);
 }
 .chart-wrap { position: relative; height: 320px; margin-bottom: 1.5rem; }
+.chart-fixed-height { min-height: 280px; }
+
+/* Budget tab */
+.budget-layout {
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) minmax(280px, 1fr);
+  gap: 1.5rem;
+  align-items: start;
+  margin-bottom: 1rem;
+}
+@media (max-width: 720px) {
+  .budget-layout { grid-template-columns: 1fr; }
+}
+.budget-chart-wrap { position: sticky; top: 0.5rem; }
+.budget-form-wrap .form-group { margin-bottom: 0.6rem; }
+.budget-form-wrap .section-collapse { margin-bottom: 0.75rem; }
+.budget-summary { margin-top: 1.25rem; padding: 1rem; background: var(--surface); border-radius: 8px; }
+.budget-summary p { margin: 0.35rem 0; }
+.budget-summary p:first-child { margin-top: 0; }
+.section-hint { font-size: 0.85rem; color: var(--text-muted); margin: -0.25rem 0 0.5rem 0; }
+.drawdown-plan-title { font-size: 1rem; font-weight: 600; margin: 1.25rem 0 0.5rem 0; color: var(--text); }
+.drawdown-plan-title:first-child { margin-top: 0; }
 .loading { color: var(--text-muted); padding: 1rem; font-style: italic; }
 .mc-options-row { margin: 0.25rem 0 0.6rem 0; }
 
@@ -398,6 +423,41 @@ tbody tr:nth-child(even) { background: rgba(255, 255, 255, 0.03); }
 .scenario-list-empty { color: var(--text-muted); font-size: 0.875rem; padding: 1rem 0; margin: 0; font-style: italic; }
 .scenario-add-wrap { position: relative; margin-top: 0.75rem; }
 .scenario-add-top { margin-top: 0; }
+.plan-list { max-height: 340px; overflow-y: auto; margin-top: 0.5rem; }
+.plan-card {
+  padding: 0.55rem 0.7rem;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.plan-card .plan-head {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+.plan-card .plan-name-input {
+  flex: 1;
+  min-width: 120px;
+  padding: 0.3rem 0.45rem;
+  font-size: 0.82rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+}
+.plan-card .plan-components {
+  margin-top: 0.45rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem 0.75rem;
+}
+.plan-card .plan-components label {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
 .add-scenario-menu {
   display: none;
   position: absolute;

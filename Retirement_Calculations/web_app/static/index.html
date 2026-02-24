@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Inheritance & House Scenarios</title>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3.0.1/dist/chartjs-plugin-annotation.min.js"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -34,14 +35,14 @@
       <div class="params-column">
         <div class="panel scenario-add-top-panel">
           <div class="scenario-add-wrap scenario-add-top">
-            <button type="button" class="btn btn-primary" id="btnAddScenario">Add scenario</button>
+            <button type="button" class="btn btn-secondary" id="btnAddScenario">Add scenario</button>
             <div id="addScenarioMenu" class="add-scenario-menu" role="menu" aria-hidden="true">
               <button type="button" role="menuitem" data-type="keep_property">Keep property (appreciation only)</button>
               <button type="button" role="menuitem" data-type="sell_invest">Sell and invest house proceeds</button>
               <button type="button" role="menuitem" data-type="sell_invest_withdrawals">Sell and invest + withdrawals</button>
               <button type="button" role="menuitem" data-type="inheritance_only">Inheritance (projected value)</button>
               <button type="button" role="menuitem" data-type="roth">Roth IRA growth</button>
-              <button type="button" role="menuitem" data-type="other_property">Other property equity</button>
+              <button type="button" role="menuitem" data-type="other_property">Property with Mortgage</button>
             </div>
           </div>
         </div>
@@ -72,8 +73,8 @@
               <div class="form-group">
                 <label>Cash reserve % (rest to invest)</label>
                 <div class="slider-row">
-                  <input type="range" id="pct_cash_reserve" min="0" max="50" step="1" value="25">
-                  <span class="value" id="pct_cash_reserve_val">25%</span>
+                  <input type="range" id="pct_cash_reserve" min="0" max="50" step="1" value="23">
+                  <span class="value" id="pct_cash_reserve_val">23%</span>
                 </div>
               </div>
             </div>
@@ -97,10 +98,28 @@
                 </div>
               </div>
               <div class="form-group">
+                <label for="stock_profile_preset">Portfolio distribution profile</label>
+                <select id="stock_profile_preset">
+                  <option value="overall_stock" selected>Overall stock profile (current default)</option>
+                  <option value="bond_profile">Typical bond profile</option>
+                  <option value="three_fund">Typical 3-fund profile</option>
+                  <option value="custom_profile">Custom profile (up to 10 assets)</option>
+                </select>
+                <span class="hint">Applies to Roth and post-sale invested portfolio simulations.</span>
+              </div>
+              <div class="form-group" id="customStockProfileWrap" style="display:none;">
+                <label>Custom portfolio assets</label>
+                <div id="customStockAssetRows"></div>
+                <div class="export-row" style="margin-top:8px;">
+                  <button type="button" class="btn btn-secondary" id="btnAddCustomStockAsset">Add asset</button>
+                </div>
+                <span class="hint">Each asset uses its own mean/std distribution. Weights are normalized automatically.</span>
+              </div>
+              <div class="form-group">
                 <label>House return mean (%)</label>
                 <div class="slider-row">
-                  <input type="range" id="house_return_mean" min="-2" max="8" step="0.25" value="0.5">
-                  <span class="value" id="house_return_mean_val">0.5%</span>
+                  <input type="range" id="house_return_mean" min="-2" max="8" step="0.25" value="1">
+                  <span class="value" id="house_return_mean_val">1%</span>
                 </div>
               </div>
               <div class="form-group">
@@ -121,11 +140,67 @@
                 <input type="text" id="benchmark_years" value="7, 12, 17, 35" placeholder="7, 12, 17, 35">
                 <span class="hint">e.g. 7, 12, 17, 35 (35 = retirement)</span>
               </div>
+            </div>
+          </details>
+
+          <details class="section-collapse">
+            <summary>Advanced settings</summary>
+            <div class="inner">
               <div class="form-group">
                 <label for="inflation_rate">Inflation assumption (%)</label>
                 <input type="number" id="inflation_rate" min="-2" max="12" step="0.1" value="3.0">
                 <span class="hint">Used to convert nominal values into today's dollars.</span>
               </div>
+              <div class="form-group checkbox-row">
+                <input type="checkbox" id="enable_stochastic_inflation">
+                <label for="enable_stochastic_inflation">Enable stochastic inflation for MC reporting</label>
+              </div>
+              <div class="form-group">
+                <label>Inflation return mean (%)</label>
+                <div class="slider-row">
+                  <input type="range" id="inflation_return_mean" min="0" max="8" step="0.1" value="3.0">
+                  <span class="value" id="inflation_return_mean_val">3.0%</span>
+                </div>
+              </div>
+              <div class="form-group">
+                <label>Inflation return std (%)</label>
+                <div class="slider-row">
+                  <input type="range" id="inflation_return_std" min="0" max="6" step="0.1" value="1.5">
+                  <span class="value" id="inflation_return_std_val">1.5%</span>
+                </div>
+              </div>
+              <div class="form-group checkbox-row">
+                <input type="checkbox" id="enable_correlation">
+                <label for="enable_correlation">Enable correlated MC factors (stock/bond/house/inflation)</label>
+              </div>
+              <div class="form-group">
+                <label for="correlation_preset">Correlation preset</label>
+                <select id="correlation_preset">
+                  <option value="balanced" selected>Balanced baseline</option>
+                  <option value="inflation_stress">Inflation stress</option>
+                  <option value="growth_boom">Growth boom</option>
+                </select>
+                <span class="hint">Bond is a latent factor now (for correlation realism); explicit bond sleeves can be added later.</span>
+              </div>
+              <details class="section-collapse">
+                <summary>Advanced latent bond factor (for correlation engine)</summary>
+                <div class="inner">
+                  <div class="form-group">
+                    <label>Bond return mean (%)</label>
+                    <div class="slider-row">
+                      <input type="range" id="bond_return_mean" min="0" max="10" step="0.1" value="4.5">
+                      <span class="value" id="bond_return_mean_val">4.5%</span>
+                    </div>
+                  </div>
+                  <div class="form-group">
+                    <label>Bond return std (%)</label>
+                    <div class="slider-row">
+                      <input type="range" id="bond_return_std" min="0" max="20" step="0.1" value="8.0">
+                      <span class="value" id="bond_return_std_val">8.0%</span>
+                    </div>
+                  </div>
+                </div>
+              </details>
               <details class="section-collapse">
                 <summary>Advanced reporting settings</summary>
                 <div class="inner">
@@ -213,7 +288,7 @@
               </div>
               <div class="form-group">
                 <label for="roth_annual_contribution">Roth annual contribution ($)</label>
-                <input type="number" id="roth_annual_contribution" min="0" step="500" value="7000">
+                <input type="number" id="roth_annual_contribution" min="0" step="500" value="7500">
               </div>
               <div class="form-group">
                 <label for="roth_contribution_years">Roth contribution years</label>
@@ -240,6 +315,69 @@
               </div>
             </div>
           </details>
+
+          <details class="section-collapse">
+            <summary>Drawdown (Phase A)</summary>
+            <div class="inner">
+              <div class="form-group checkbox-row">
+                <input type="checkbox" id="drawdown_enabled" checked>
+                <label for="drawdown_enabled">Enable drawdown analysis</label>
+              </div>
+              <div class="form-group">
+                <label for="drawdown_start_year">Retirement start year</label>
+                <input type="number" id="drawdown_start_year" min="0" max="120" value="35">
+              </div>
+              <div class="form-group">
+                <label for="drawdown_end_year">Retirement end year</label>
+                <input type="number" id="drawdown_end_year" min="1" max="120" value="70">
+              </div>
+              <div class="form-group">
+                <label for="drawdown_spending_today">Annual spending target today ($)</label>
+                <input type="number" id="drawdown_spending_today" min="0" step="1000" value="100000">
+              </div>
+              <div class="form-group">
+                <label for="drawdown_replacement_income_today">Replacement income target today ($)</label>
+                <input type="number" id="drawdown_replacement_income_today" min="0" step="1000" value="100000">
+              </div>
+              <div class="form-group">
+                <label for="drawdown_safe_withdrawal_rate">Safe withdrawal rate (%)</label>
+                <input type="number" id="drawdown_safe_withdrawal_rate" min="0.5" max="15" step="0.1" value="5">
+              </div>
+              <div class="form-group">
+                <label for="drawdown_success_threshold">Target success probability (%)</label>
+                <input type="number" id="drawdown_success_threshold" min="50" max="99" step="1" value="90">
+              </div>
+              <div class="form-group">
+                <label for="drawdown_inflation_mode">Spending inflation mode</label>
+                <select id="drawdown_inflation_mode">
+                  <option value="flat" selected>Flat inflation assumption</option>
+                  <option value="stochastic_path">Stochastic inflation path</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label for="drawdown_coast_growth_rate">Coast FIRE growth assumption (%)</label>
+                <input type="number" id="drawdown_coast_growth_rate" min="-2" max="20" step="0.1" value="6.0">
+              </div>
+              <div class="form-group">
+                <label for="drawdown_target_terminal_fraction">Target terminal balance (% of start)</label>
+                <input type="number" id="drawdown_target_terminal_fraction" min="0" max="100" step="5" value="0" title="0 = exhaust portfolio by end; e.g. 10 = leave 10% of start balance">
+                <span class="hint">0 = exhaust by retirement end. Used for &quot;Sustainable withdrawal&quot; stats.</span>
+              </div>
+              <details class="section-collapse">
+                <summary>Income sources (Phase A)</summary>
+                <div class="inner">
+                  <div class="form-group">
+                    <label for="ss_start_year">Social Security start year (years from today)</label>
+                    <input type="number" id="ss_start_year" min="0" max="120" value="36" title="Years from today when you start receiving benefits (e.g. 36 if you turn 67 in 36 years)">
+                  </div>
+                  <div class="form-group">
+                    <label for="ss_amount_today">Social Security amount today ($/year)</label>
+                    <input type="number" id="ss_amount_today" min="0" step="1000" value="36000">
+                  </div>
+                </div>
+              </details>
+            </div>
+          </details>
             </div>
           </details>
 
@@ -249,6 +387,18 @@
             <div class="scenario-list">
               <p id="scenarioListEmpty" class="scenario-list-empty">No scenarios yet. Click &quot;Add scenario&quot; to choose a template.</p>
               <div id="scenarioListCards" class="scenario-list-cards"></div>
+            </div>
+          </div>
+
+          <div class="scenarios-section">
+            <h2>Plans in this model</h2>
+            <p class="scenarios-hint">Create plans by combining selected scenarios. Plans are compared in the combined results table.</p>
+            <div class="export-row">
+              <button type="button" class="btn btn-secondary" id="btnAddPlan">Add plan</button>
+            </div>
+            <div class="plan-list">
+              <p id="planListEmpty" class="scenario-list-empty">No plans yet. Add a plan and choose scenarios to combine.</p>
+              <div id="planListCards" class="scenario-list-cards"></div>
             </div>
           </div>
         </div>
@@ -271,6 +421,7 @@
             <button type="button" role="tab" id="tabOverview" aria-selected="true" aria-controls="panelOverview">Overview</button>
             <button type="button" role="tab" id="tabTrajectories" aria-selected="false" aria-controls="panelTrajectories">Trajectories</button>
             <button type="button" role="tab" id="tabMC" aria-selected="false" aria-controls="panelMC">Monte Carlo</button>
+            <button type="button" role="tab" id="tabBudget" aria-selected="false" aria-controls="panelBudget">Budget</button>
           </div>
 
           <div id="panelOverview" class="tab-panel is-active" role="tabpanel">
@@ -285,6 +436,66 @@
                 <button type="button" class="btn btn-secondary" id="btnExportCsv">Download table as CSV</button>
               </div>
             </div>
+            <div class="results-section">
+              <h3>Combined selected scenarios (plan)</h3>
+              <div class="table-wrap" id="combinedPlanTable"><span class="loading">Update projections to see combined plan statistics.</span></div>
+              <div class="export-row">
+                <button type="button" class="btn btn-secondary" id="btnExportPlanCsv">Download combined plans CSV</button>
+              </div>
+            </div>
+            <div class="results-section">
+              <h3>Drawdown insights (Phase A)</h3>
+              <p class="section-hint">Success probability = fraction of paths that cover the desired annual spending goal every year. Depletion probability = fraction of paths where portfolio balance reaches 0 before retirement end date.</p>
+              <div class="table-wrap" id="drawdownSummary"><span class="loading">Update projections to see drawdown metrics.</span></div>
+            </div>
+            <div class="results-section">
+              <h3>Sustainable withdrawal to target</h3>
+              <p class="section-hint">Constant real withdrawal (today&apos;s $/year) that would draw each path to the chosen target terminal balance by retirement end. 0% target = exhaust portfolio. Distribution across paths:</p>
+              <div id="sustainableWithdrawalSummary"><span class="loading">Update projections to see sustainable withdrawal.</span></div>
+              <div class="chart-wrap chart-fixed-height">
+                <canvas id="chartSustainableWithdrawal"></canvas>
+              </div>
+            </div>
+            <div class="results-section">
+              <h3>Portfolio with vs without drawdown</h3>
+              <p class="section-hint">Net worth if you never withdrew (plan median) vs actual end-of-year portfolio balance after withdrawals. Shows how much drawdown affects growth.</p>
+              <div class="chart-wrap chart-fixed-height">
+                <canvas id="chartDrawdownImpact"></canvas>
+              </div>
+            </div>
+            <div class="results-section">
+              <h3>Shortfall risk by year (retirement)</h3>
+              <p class="section-hint">Probability of spending shortfall in each year of retirement (from configured start year).</p>
+              <div class="chart-wrap chart-fixed-height">
+                <canvas id="chartDrawdownShortfall"></canvas>
+              </div>
+            </div>
+            <div class="results-section">
+              <h3>Remaining portfolio balance (retirement)</h3>
+              <p class="section-hint">Median and 10–90% range of portfolio value at end of each retirement year.</p>
+              <div class="chart-wrap chart-fixed-height">
+                <canvas id="chartDrawdownBalance"></canvas>
+              </div>
+            </div>
+            <div class="results-section">
+              <h3>Success probability by retirement start year</h3>
+              <p class="section-hint">How success rate changes if you retire in a given year (threshold line = your target).</p>
+              <div class="chart-wrap chart-fixed-height">
+                <canvas id="chartDrawdownScan"></canvas>
+              </div>
+            </div>
+            <div class="results-section">
+              <h3>Spending sensitivity</h3>
+              <p class="section-hint">Success probability and earliest retirement year at several spending levels (50%, 80%, 100%, 120%, 150% of your annual spending target).</p>
+              <div id="spendingSensitivitySection" class="spending-sensitivity-section">
+                <span class="loading">Update projections to see spending sensitivity.</span>
+              </div>
+            </div>
+            <div class="results-section">
+              <h3>Drawdown by year (detail table)</h3>
+              <p class="section-hint">Per-year shortfall risk, remaining balance, and withdrawal. One table per plan.</p>
+              <div id="drawdownYearlyTables"><span class="loading">Update projections to see drawdown by year.</span></div>
+            </div>
           </div>
 
           <div id="panelTrajectories" class="tab-panel" role="tabpanel">
@@ -294,6 +505,12 @@
                 <canvas id="chartTrajectories"></canvas>
               </div>
             </div>
+            <div class="results-section">
+              <h3>Combined plans over time</h3>
+              <div class="chart-wrap">
+                <canvas id="chartPlanTrajectories"></canvas>
+              </div>
+            </div>
           </div>
 
           <div id="panelMC" class="tab-panel" role="tabpanel">
@@ -301,6 +518,12 @@
               <h3>Scenario medians & 25–75% bands</h3>
               <div class="chart-wrap">
                 <canvas id="chartMC"></canvas>
+              </div>
+            </div>
+            <div class="results-section">
+              <h3>Combined plans — medians & 25–75% bands</h3>
+              <div class="chart-wrap">
+                <canvas id="chartPlanMC"></canvas>
               </div>
             </div>
             <div class="results-section">
@@ -314,6 +537,70 @@
               <div class="table-wrap" id="mcBenchmarkTable"><span class="loading">Update projections to see Monte Carlo medians.</span></div>
               <div class="export-row">
                 <button type="button" class="btn btn-secondary" id="btnExportMcCsv">Download Monte Carlo as CSV</button>
+              </div>
+            </div>
+            <div class="results-section">
+              <h3>Combined plans Monte Carlo benchmark table</h3>
+              <div class="mc-options-row">
+                <label class="checkbox-row">
+                  <input type="checkbox" id="planMcShowRiskColumns">
+                  <span>Show risk columns (p75-p25, p25/median, p10, ES)</span>
+                </label>
+              </div>
+              <div class="table-wrap" id="planMcBenchmarkTable"><span class="loading">Update projections to see combined plan Monte Carlo medians.</span></div>
+              <div class="export-row">
+                <button type="button" class="btn btn-secondary" id="btnExportPlanMcCsv">Download combined plans Monte Carlo CSV</button>
+              </div>
+            </div>
+          </div>
+
+          <div id="panelBudget" class="tab-panel" role="tabpanel">
+            <div class="results-section">
+              <h3>Budget → annual spending target</h3>
+              <p class="section-hint">Enter average monthly spending by category. The pie chart updates as you type. We recommend an annual spending target for the Drawdown (Phase A) settings. Annual one-offs are included in the total and shown as a monthly-equivalent slice.</p>
+              <div class="budget-layout">
+                <div class="budget-chart-wrap">
+                  <div class="chart-wrap chart-fixed-height">
+                    <canvas id="chartBudget"></canvas>
+                  </div>
+                </div>
+                <div class="budget-form-wrap">
+                  <details class="section-collapse" open>
+                    <summary>Monthly spending by category</summary>
+                    <div class="inner" id="budgetCategoryInputs">
+                      <div class="form-group"><label for="budget_housing">Housing ($/mo)</label><input type="number" id="budget_housing" min="0" step="50" value="0"></div>
+                      <div class="form-group"><label for="budget_utilities">Utilities ($/mo)</label><input type="number" id="budget_utilities" min="0" step="50" value="0"></div>
+                      <div class="form-group"><label for="budget_groceries">Groceries &amp; food ($/mo)</label><input type="number" id="budget_groceries" min="0" step="50" value="0"></div>
+                      <div class="form-group"><label for="budget_dining_out">Dining out ($/mo)</label><input type="number" id="budget_dining_out" min="0" step="50" value="0"></div>
+                      <div class="form-group"><label for="budget_transport">Transport ($/mo)</label><input type="number" id="budget_transport" min="0" step="50" value="0"></div>
+                      <div class="form-group"><label for="budget_healthcare">Healthcare ($/mo)</label><input type="number" id="budget_healthcare" min="0" step="50" value="0"></div>
+                      <div class="form-group"><label for="budget_insurance">Insurance ($/mo)</label><input type="number" id="budget_insurance" min="0" step="50" value="0"></div>
+                      <div class="form-group"><label for="budget_subscriptions">Subscriptions &amp; memberships ($/mo)</label><input type="number" id="budget_subscriptions" min="0" step="50" value="0"></div>
+                      <div class="form-group"><label for="budget_shopping">Shopping &amp; discretionary ($/mo)</label><input type="number" id="budget_shopping" min="0" step="50" value="0"></div>
+                      <div class="form-group"><label for="budget_travel">Travel ($/mo avg)</label><input type="number" id="budget_travel" min="0" step="50" value="0"></div>
+                      <div class="form-group"><label for="budget_gifts_donations">Gifts &amp; donations ($/mo)</label><input type="number" id="budget_gifts_donations" min="0" step="50" value="0"></div>
+                      <div class="form-group"><label for="budget_childcare">Childcare ($/mo)</label><input type="number" id="budget_childcare" min="0" step="50" value="0"></div>
+                      <div class="form-group"><label for="budget_pet_food">Pet food ($/mo)</label><input type="number" id="budget_pet_food" min="0" step="50" value="0"></div>
+                      <div class="form-group"><label for="budget_pet_insurance">Pet insurance ($/mo)</label><input type="number" id="budget_pet_insurance" min="0" step="50" value="0"></div>
+                      <div class="form-group"><label for="budget_phone">Phone bill ($/mo)</label><input type="number" id="budget_phone" min="0" step="50" value="0"></div>
+                      <div class="form-group"><label for="budget_gym">Gym ($/mo)</label><input type="number" id="budget_gym" min="0" step="50" value="0"></div>
+                      <div class="form-group"><label for="budget_other">Other ($/mo)</label><input type="number" id="budget_other" min="0" step="50" value="0"></div>
+                    </div>
+                  </details>
+                  <div class="form-group">
+                    <label for="budget_annual_oneoffs">Annual one-offs ($/year)</label>
+                    <input type="number" id="budget_annual_oneoffs" min="0" step="500" value="0" placeholder="e.g. property tax, annual insurance">
+                    <span class="hint">Included in recommended target; shown in pie as monthly equivalent (÷12).</span>
+                  </div>
+                </div>
+              </div>
+              <div class="budget-summary" id="budgetSummary">
+                <p><strong>Monthly total:</strong> <span id="budgetMonthlyTotal">$0</span></p>
+                <p><strong>Recommended annual spending target:</strong> <span id="budgetAnnualTarget">$0</span></p>
+                <p class="section-hint">Use this in Drawdown (Phase A) as &quot;Annual spending target today&quot; and &quot;Replacement income target today&quot;.</p>
+              </div>
+              <div class="export-row">
+                <button type="button" class="btn btn-primary" id="btnBudgetApply">Use as annual spending target</button>
               </div>
             </div>
           </div>

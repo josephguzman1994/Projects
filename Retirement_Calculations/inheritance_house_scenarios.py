@@ -23,7 +23,7 @@ adjust if your situation differs.
 
 import csv
 import math
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
 try:
@@ -59,15 +59,15 @@ class HouseScenarioParams:
     home_value_today: float = 864_000
     years_live_in_before_sale: int = 2
     # Scenario 2: sale and allocation
-    pct_cash_reserve: float = 0.25   # 25% for housing elsewhere + sinking fund
-    pct_invest: float = 0.75         # 75% into ETFs
+    pct_cash_reserve: float = 0.23   # 23% for housing elsewhere + sinking fund (sync with default_params)
+    pct_invest: float = 0.77         # 77% into ETFs
     selling_costs_pct: float = 0.06  # e.g. 6% (commission + closing)
     # Sale: tax assumptions (at point of sale)
     basis_at_sale: Optional[float] = None  # cost basis at sale; None = use home_value_today (stepped-up)
     primary_residence_exclusion: float = 500_000  # $500k exclusion (married)
     capital_gains_tax_rate: float = 0.0  # federal rate on taxable gain; 0 = none after exclusion
     # Growth assumptions (deterministic fallback)
-    home_appreciation_rate: float = 0.004  # conservative; e.g. 0.4% (Zillow 1-yr style)
+    home_appreciation_rate: float = 0.01  # sync with default_params
     home_return_sequence: Optional[Tuple[float, ...]] = None  # per-year returns; if set, overrides rate for those years
     investment_return_rate: float = 0.07    # e.g. VOO/VTI long-term nominal
     cash_reserve_return_rate: float = 0.02  # savings / high-yield
@@ -75,7 +75,9 @@ class HouseScenarioParams:
     mc_n_paths: int = 10000                  # number of simulation paths
     stock_return_mean: float = 0.08          # expected annual return (e.g. 8%)
     stock_return_std: float = 0.17          # annual volatility (e.g. 17%)
-    house_return_mean: float = 0.005        # expected annual house return (0.5%; short-term often <1%)
+    stock_profile_preset: str = "overall_stock"  # overall_stock | bond_profile | three_fund | custom_profile
+    custom_stock_assets: List[Dict[str, Any]] = field(default_factory=list)
+    house_return_mean: float = 0.01         # expected annual house return (sync with default_params)
     house_return_std: float = 0.08          # annual house volatility (e.g. 8%)
     use_fat_tails: bool = False             # if True, sample returns from Student-t (fatter tails)
     fat_tail_df: float = 5.0                # Student-t degrees of freedom; lower = fatter tails
@@ -94,16 +96,23 @@ class HouseScenarioParams:
     benchmark_years: Tuple[int, ...] = (7, 12, 17, 35)
     # Reporting assumption: convert nominal results to today's dollars
     inflation_rate: float = 0.03
+    enable_stochastic_inflation: bool = False  # if True, inflation is sampled path-by-path
+    inflation_return_mean: float = 0.03
+    inflation_return_std: float = 0.015
+    enable_correlation: bool = False  # if True, use correlation preset for MC return draws
+    correlation_preset: str = "balanced"
+    bond_return_mean: float = 0.045  # latent factor for future bond sleeve modeling
+    bond_return_std: float = 0.08
     retirement_income_rate: float = 0.045  # annual income-equivalent rule (e.g. 4.5%)
     es_tail_pct: float = 0.05  # expected shortfall tail (e.g. 5% worst outcomes)
     # Other assets (common to all scenarios): Roth IRA + other house
     roth_balance_today: float = 35_500
-    roth_annual_contribution: float = 7_000
+    roth_annual_contribution: float = 7_500  # sync with default_params
     roth_contribution_years: int = 35  # contribute through this year (e.g. until retirement)
     other_house_value_today: float = 316_000
     other_house_mortgage_remaining: float = 140_748
     other_house_mortgage_payoff_years: float = 20.0  # years to pay off (linear payoff assumed)
-    other_house_appreciation_rate: float = 0.004  # same as home_appreciation_rate default
+    other_house_appreciation_rate: float = 0.01  # sync with default_params
 
 
 # ---------------------------------------------------------------------------
@@ -384,6 +393,36 @@ def other_house_equity_trajectory(params: HouseScenarioParams, max_years: int) -
     return years, vals
 
 
+CORRELATION_PRESETS: Dict[str, List[List[float]]] = {
+    # [stock, bond, house, inflation]
+    "balanced": [
+        [1.00, -0.20, 0.20, 0.25],
+        [-0.20, 1.00, 0.10, -0.10],
+        [0.20, 0.10, 1.00, 0.30],
+        [0.25, -0.10, 0.30, 1.00],
+    ],
+    "inflation_stress": [
+        [1.00, -0.35, 0.10, 0.45],
+        [-0.35, 1.00, 0.05, -0.30],
+        [0.10, 0.05, 1.00, 0.50],
+        [0.45, -0.30, 0.50, 1.00],
+    ],
+    "growth_boom": [
+        [1.00, -0.10, 0.35, 0.10],
+        [-0.10, 1.00, 0.10, -0.10],
+        [0.35, 0.10, 1.00, 0.20],
+        [0.10, -0.10, 0.20, 1.00],
+    ],
+}
+
+
+def _corr_matrix_for_preset(name: str):
+    key = str(name or "balanced").strip().lower()
+    if key not in CORRELATION_PRESETS:
+        key = "balanced"
+    return np.array(CORRELATION_PRESETS[key], dtype=float), key
+
+
 # ---------------------------------------------------------------------------
 # Monte Carlo: sequence of returns
 # ---------------------------------------------------------------------------
@@ -399,6 +438,115 @@ def _net_proceeds_from_sale(
     taxable_gain = max(0.0, gain - params.primary_residence_exclusion)
     cap_gains_tax = taxable_gain * params.capital_gains_tax_rate
     return sale_price - selling_costs - cap_gains_tax
+
+
+MAX_CUSTOM_STOCK_ASSETS = 10
+
+
+def _clampf(v: float, lo: float, hi: float) -> float:
+    return max(lo, min(hi, float(v)))
+
+
+def _safe_float(v: Any, default: float) -> float:
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def _stock_profile_assets(params: HouseScenarioParams) -> Tuple[List[Dict[str, float]], str]:
+    """Return normalized portfolio assets list with keys: weight, mean, std."""
+    key = str(params.stock_profile_preset or "overall_stock").strip().lower()
+    if key not in {"overall_stock", "bond_profile", "three_fund", "custom_profile"}:
+        key = "overall_stock"
+
+    if key == "bond_profile":
+        assets = [{
+            "weight": 1.0,
+            "mean": _clampf(params.bond_return_mean, -0.5, 1.0),
+            "std": _clampf(params.bond_return_std, 0.0, 2.0),
+        }]
+    elif key == "three_fund":
+        us_mean = _clampf(params.stock_return_mean, -0.5, 1.0)
+        us_std = _clampf(params.stock_return_std, 0.0, 2.0)
+        assets = [
+            {"weight": 0.55, "mean": us_mean, "std": us_std},
+            {"weight": 0.25, "mean": _clampf(us_mean - 0.005, -0.5, 1.0), "std": _clampf(us_std * 1.05, 0.0, 2.0)},
+            {"weight": 0.20, "mean": _clampf(params.bond_return_mean, -0.5, 1.0), "std": _clampf(params.bond_return_std, 0.0, 2.0)},
+        ]
+    elif key == "custom_profile":
+        raw = params.custom_stock_assets or []
+        assets = []
+        for i, a in enumerate(raw[:MAX_CUSTOM_STOCK_ASSETS]):
+            if not isinstance(a, dict):
+                continue
+            assets.append({
+                "weight": _clampf(_safe_float(a.get("weight"), 0.0), 0.0, 1.0),
+                "mean": _clampf(_safe_float(a.get("mean"), 0.0), -0.5, 1.0),
+                "std": _clampf(_safe_float(a.get("std"), 0.0), 0.0, 2.0),
+            })
+        if not assets:
+            key = "overall_stock"
+            assets = [{
+                "weight": 1.0,
+                "mean": _clampf(params.stock_return_mean, -0.5, 1.0),
+                "std": _clampf(params.stock_return_std, 0.0, 2.0),
+            }]
+    else:
+        assets = [{
+            "weight": 1.0,
+            "mean": _clampf(params.stock_return_mean, -0.5, 1.0),
+            "std": _clampf(params.stock_return_std, 0.0, 2.0),
+        }]
+
+    w_sum = sum(max(0.0, float(a.get("weight", 0.0))) for a in assets)
+    if w_sum <= 0:
+        w = 1.0 / max(1, len(assets))
+        for a in assets:
+            a["weight"] = w
+    else:
+        for a in assets:
+            a["weight"] = max(0.0, float(a.get("weight", 0.0))) / w_sum
+    return assets, key
+
+
+def _stock_profile_moments(params: HouseScenarioParams) -> Tuple[float, float]:
+    assets, _ = _stock_profile_assets(params)
+    mean = sum(a["weight"] * a["mean"] for a in assets)
+    var = sum((a["weight"] ** 2) * (a["std"] ** 2) for a in assets)
+    return float(mean), float(math.sqrt(max(0.0, var)))
+
+
+def stock_profile_moments(params: HouseScenarioParams) -> Tuple[float, float]:
+    """Public wrapper for effective stock profile mean/std."""
+    return _stock_profile_moments(params)
+
+
+def sample_stock_portfolio_returns(rng, params: HouseScenarioParams, n_paths: int, max_year: int) -> Tuple["np.ndarray", str]:
+    """Sample portfolio returns for Roth/post-sale invested sleeves."""
+    assets, key = _stock_profile_assets(params)
+    if key != "custom_profile":
+        mean, std = _stock_profile_moments(params)
+        if params.use_fat_tails:
+            df = max(2.1, float(params.fat_tail_df))
+            z = rng.standard_t(df=df, size=(n_paths, max_year + 1))
+            z = z * math.sqrt((df - 2.0) / df)
+            out = mean + std * z
+        else:
+            out = rng.normal(mean, std, size=(n_paths, max_year + 1))
+        return np.clip(out, -0.99, 2.0), key
+
+    total = np.zeros((n_paths, max_year + 1))
+    for a in assets:
+        if params.use_fat_tails:
+            df = max(2.1, float(params.fat_tail_df))
+            z = rng.standard_t(df=df, size=(n_paths, max_year + 1))
+            z = z * math.sqrt((df - 2.0) / df)
+            r = a["mean"] + a["std"] * z
+        else:
+            r = rng.normal(a["mean"], a["std"], size=(n_paths, max_year + 1))
+        total += a["weight"] * r
+    return np.clip(total, -0.99, 2.0), key
 
 
 def run_monte_carlo(params: HouseScenarioParams, seed: Optional[int] = None) -> dict:
@@ -428,9 +576,28 @@ def run_monte_carlo(params: HouseScenarioParams, seed: Optional[int] = None) -> 
             out = rng.normal(mean, std, size=(n_paths, max_year + 1))
         return np.clip(out, -0.99, 2.0)
 
+    corr_matrix, corr_key = _corr_matrix_for_preset(params.correlation_preset)
+    corr_enabled = bool(params.enable_correlation)
+    stock_profile_key = str(params.stock_profile_preset or "overall_stock").strip().lower()
+    stock_profile_mean, stock_profile_std = _stock_profile_moments(params)
+
     # Pre-sample all returns: [path, year]
-    house_returns = sample_returns(params.house_return_mean, params.house_return_std)
-    stock_returns = sample_returns(params.stock_return_mean, params.stock_return_std)
+    if corr_enabled:
+        if params.use_fat_tails:
+            z = rng.standard_t(df=tail_df, size=(n_paths, max_year + 1, 4))
+            z = z * math.sqrt((tail_df - 2.0) / tail_df)
+        else:
+            z = rng.normal(0.0, 1.0, size=(n_paths, max_year + 1, 4))
+        # Correlate annual shocks across factors.
+        L = np.linalg.cholesky(corr_matrix + np.eye(4) * 1e-12)
+        zc = z @ L.T
+        stock_returns = np.clip(stock_profile_mean + stock_profile_std * zc[:, :, 0], -0.99, 2.0)
+        house_returns = np.clip(params.house_return_mean + params.house_return_std * zc[:, :, 2], -0.99, 2.0)
+        inflation_returns = np.clip(params.inflation_return_mean + params.inflation_return_std * zc[:, :, 3], -0.20, 0.50)
+    else:
+        house_returns = sample_returns(params.house_return_mean, params.house_return_std)
+        stock_returns, stock_profile_key = sample_stock_portfolio_returns(rng, params, n_paths, max_year)
+        inflation_returns = sample_returns(params.inflation_return_mean, params.inflation_return_std)
 
     s1_paths = np.zeros((n_paths, max_year + 1))
     s2_paths = np.zeros((n_paths, max_year + 1))
@@ -516,12 +683,22 @@ def run_monte_carlo(params: HouseScenarioParams, seed: Optional[int] = None) -> 
 
     years = list(range(max_year + 1))
     def summarize_paths(paths: "np.ndarray") -> Dict[str, "np.ndarray"]:
-        p10 = np.percentile(paths, 10, axis=0)
-        p25 = np.percentile(paths, 25, axis=0)
-        p75 = np.percentile(paths, 75, axis=0)
-        median = np.median(paths, axis=0)
-        k = max(1, int(math.ceil(es_alpha * paths.shape[0])))
+        """One sort for all percentiles and ES (efficiency gain)."""
+        n = paths.shape[0]
         sorted_paths = np.sort(paths, axis=0)
+        k = max(1, int(math.ceil(es_alpha * n)))
+
+        def _perc(q: float):
+            idx = (n - 1) * (q / 100.0)
+            lo = int(np.floor(idx))
+            hi = min(lo + 1, n - 1)
+            w = idx - lo
+            return (1.0 - w) * sorted_paths[lo, :] + w * sorted_paths[hi, :]
+
+        p10 = _perc(10)
+        p25 = _perc(25)
+        median = _perc(50)
+        p75 = _perc(75)
         es = np.mean(sorted_paths[:k, :], axis=0)
         return {"median": median, "p10": p10, "p25": p25, "p75": p75, "es": es}
 
@@ -605,6 +782,16 @@ def run_monte_carlo(params: HouseScenarioParams, seed: Optional[int] = None) -> 
     out["benchmark_roth_p10"] = {y: float(roth_stats["p10"][y]) for y in benchmark_years}
     out["benchmark_roth_es"] = {y: float(roth_stats["es"][y]) for y in benchmark_years}
     out["es_tail_pct"] = es_alpha
+    out["correlation_enabled"] = corr_enabled
+    out["correlation_preset"] = corr_key
+    out["stock_profile_preset"] = stock_profile_key
+    out["stochastic_inflation_enabled"] = bool(params.enable_stochastic_inflation)
+    if params.enable_stochastic_inflation:
+        inflation_path_median = np.median(inflation_returns, axis=0)
+        out["inflation_path_median"] = inflation_path_median
+        out["inflation_report_rate"] = float(np.median(inflation_path_median))
+    else:
+        out["inflation_report_rate"] = float(params.inflation_rate)
     return out
 
 
@@ -1273,20 +1460,20 @@ def default_params() -> HouseScenarioParams:
     return HouseScenarioParams(
         home_value_today=864_000,
         years_live_in_before_sale=2,
-        pct_cash_reserve=0.25,
-        pct_invest=0.75,
+        pct_cash_reserve=0.23,
+        pct_invest=0.77,
         selling_costs_pct=0.06,
         basis_at_sale=None,
         primary_residence_exclusion=500_000,
         capital_gains_tax_rate=0.0,
-        home_appreciation_rate=0.004,
+        home_appreciation_rate=0.01,
         home_return_sequence=None,
         investment_return_rate=0.07,
         cash_reserve_return_rate=0.02,
         mc_n_paths=10000,
         stock_return_mean=0.08,
         stock_return_std=0.17,
-        house_return_mean=0.005,
+        house_return_mean=0.01,
         house_return_std=0.08,
         withdrawal_start_year=17,
         withdrawal_rate=0.02,
@@ -1299,12 +1486,12 @@ def default_params() -> HouseScenarioParams:
         inheritance_beneficiary_share=1.0 / 3,
         benchmark_years=(7, 12, 17, 35),
         roth_balance_today=35_500,
-        roth_annual_contribution=7_000,
+        roth_annual_contribution=7_500,
         roth_contribution_years=35,
         other_house_value_today=316_000,
         other_house_mortgage_remaining=140_748,
         other_house_mortgage_payoff_years=20.0,
-        other_house_appreciation_rate=0.004,
+        other_house_appreciation_rate=0.01,
     )
 
 
@@ -1476,7 +1663,7 @@ def prompt_params() -> HouseScenarioParams:
         basis_at_sale=None,
         primary_residence_exclusion=500_000,
         capital_gains_tax_rate=0.0,
-        home_appreciation_rate=0.004,
+        home_appreciation_rate=0.01,
         home_return_sequence=None,
         investment_return_rate=0.07,
         cash_reserve_return_rate=0.02,
@@ -1496,12 +1683,12 @@ def prompt_params() -> HouseScenarioParams:
         inheritance_beneficiary_share=inheritance_beneficiary_share,
         benchmark_years=(7, 12, 17, 35),
         roth_balance_today=35_500,
-        roth_annual_contribution=7_000,
+        roth_annual_contribution=7_500,
         roth_contribution_years=35,
         other_house_value_today=316_000,
         other_house_mortgage_remaining=140_748,
         other_house_mortgage_payoff_years=20.0,
-        other_house_appreciation_rate=0.004,
+        other_house_appreciation_rate=0.01,
     )
 
 
